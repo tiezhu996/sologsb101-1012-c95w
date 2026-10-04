@@ -13,6 +13,7 @@ import { createEmptyCalibrationFilter, judgeCalibration, sensitivityDelta } from
 import type { Replace, ReplaceFilterState, ReplaceState } from '@/types/replace';
 import { canTransition, createEmptyReplaceFilter } from '@/types/replace';
 import type { Instrument } from '@/types/instrument';
+import { calibrationDedupKey } from '@/utils/calibrationDedup';
 import type { RootState } from '@/stores/store';
 
 /** 选择器入参统一用 RootState */
@@ -43,9 +44,10 @@ const initialState: CalibrationSliceState = {
 
 export const createCalibration = createAsyncThunk(
   'calibration/createCalibration',
-  async (payload: Omit<Calibration, 'id' | 'createdAt' | 'updatedAt' | 'responseVerdict'>) => {
+  async (payload: Omit<Calibration, 'id' | 'createdAt' | 'updatedAt' | 'responseVerdict' | 'dedupKey'>) => {
     const now = Date.now();
     const instrument = await db.instruments.get(payload.instrumentId);
+    const station = instrument ? await db.stations.get(instrument.stationId) : undefined;
     const verdict = judgeCalibration(
       instrument?.type ?? '宽频带',
       payload.sensitivity,
@@ -54,6 +56,7 @@ export const createCalibration = createAsyncThunk(
     const row: Calibration = {
       ...payload,
       responseVerdict: verdict,
+      dedupKey: calibrationDedupKey(station?.code ?? '', instrument?.serialNo ?? '', payload.date),
       id: createId('cal'),
       createdAt: now,
       updatedAt: now,
@@ -74,13 +77,17 @@ export const updateCalibration = createAsyncThunk(
   'calibration/updateCalibration',
   async (payload: { id: string; patch: Partial<Calibration> }) => {
     const existing = await db.calibrations.get(payload.id);
-    const instrument = existing ? await db.instruments.get(existing.instrumentId) : undefined;
+    const instrumentId = payload.patch.instrumentId ?? existing?.instrumentId;
+    const date = payload.patch.date ?? existing?.date ?? '';
+    const instrument = instrumentId ? await db.instruments.get(instrumentId) : undefined;
+    const station = instrument ? await db.stations.get(instrument.stationId) : undefined;
     const nextSensitivity = payload.patch.sensitivity ?? existing?.sensitivity ?? 0;
     const nextNoise = payload.patch.selfNoise ?? existing?.selfNoise ?? 0;
     const verdict = judgeCalibration(instrument?.type ?? '宽频带', nextSensitivity, nextNoise);
     await db.calibrations.update(payload.id, {
       ...payload.patch,
       responseVerdict: payload.patch.responseVerdict ?? verdict,
+      dedupKey: calibrationDedupKey(station?.code ?? '', instrument?.serialNo ?? '', date),
       updatedAt: Date.now(),
     } as never);
     return payload;
@@ -117,7 +124,13 @@ export const createReplace = createAsyncThunk(
   'calibration/createReplace',
   async (payload: Omit<Replace, 'id' | 'createdAt' | 'updatedAt'>) => {
     const now = Date.now();
-    const row: Replace = { ...payload, id: createId('rpl'), createdAt: now, updatedAt: now };
+    const row: Replace = {
+      ...payload,
+      kind: payload.kind ?? 'manual',
+      id: createId('rpl'),
+      createdAt: now,
+      updatedAt: now,
+    };
     await db.replaces.put(row);
     return row;
   }

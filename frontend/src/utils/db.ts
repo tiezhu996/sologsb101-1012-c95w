@@ -12,9 +12,11 @@ import type { Instrument } from '@/types/instrument';
 import { judgeCalibration } from '@/types/calibration';
 import type { Calibration } from '@/types/calibration';
 import type { Replace } from '@/types/replace';
+import type { ImportBatch, ImportItem } from '@/types/import';
+import { calibrationDedupKey } from '@/utils/calibrationDedup';
 
 /** 当前数据结构版本号：每次调整字段结构必须 +1 并补迁移 */
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
 
 /** 数据库名（浏览器 IndexedDB 中的库名） */
 export const DB_NAME = 'gbseisarray';
@@ -44,6 +46,10 @@ export class SeisArrayDatabase extends Dexie {
   instruments!: Table<Instrument, string>;
   calibrations!: Table<Calibration, string>;
   replaces!: Table<Replace, string>;
+  /** 标定离线包入库批次（检查点根记录，原台账未完成前不改动） */
+  importBatches!: Table<ImportBatch, string>;
+  /** 批次内逐项核对结果与处理状态（断点续跑的最小粒度） */
+  importItems!: Table<ImportItem, string>;
 
   constructor() {
     super(DB_NAME);
@@ -58,7 +64,7 @@ export class SeisArrayDatabase extends Dexie {
     });
 
     // v2：补齐筛选与统计需要的索引（孔径/布设日期、经纬度/基岩、类型/序列号、灵敏度/结论、原因）
-    this.version(DB_VERSION)
+    this.version(2)
       .stores({
         arrays: 'id, name, state, apertureKm, deployDate, department, updatedAt',
         stations: 'id, arrayId, code, lat, lng, elevM, bedrock, updatedAt',
@@ -86,6 +92,45 @@ export class SeisArrayDatabase extends Dexie {
               Object.assign(row, factory());
             });
         }
+      });
+
+    // v3：可恢复入库流程——标定增加业务核对键索引，新增批次 / 入库项检查点表
+    this.version(DB_VERSION)
+      .stores({
+        arrays: 'id, name, state, apertureKm, deployDate, department, updatedAt',
+        stations: 'id, arrayId, code, lat, lng, elevM, bedrock, updatedAt',
+        instruments: 'id, stationId, type, model, serialNo, installDate, state, updatedAt',
+        calibrations:
+          'id, instrumentId, date, sensitivity, selfNoise, responseVerdict, dedupKey, updatedAt',
+        replaces: 'id, instrumentId, state, date, newSerialNo, kind, updatedAt',
+        importBatches: 'id, state, createdAt, updatedAt, committedAt',
+        importItems: 'id, batchId, state, classify, dedupKey, updatedAt',
+      })
+      .upgrade(async (tx) => {
+        // 回填标定业务核对键：台站码|序列号|标定日期
+        const stations = await tx.table<SeisStation, string>('stations').toArray();
+        const instruments = await tx.table<Instrument, string>('instruments').toArray();
+        const stationCodeById = new Map(stations.map((row) => [row.id, row.code]));
+        await tx
+          .table<Calibration, string>('calibrations')
+          .toCollection()
+          .modify((row) => {
+            if (typeof row.dedupKey !== 'string' || row.dedupKey.length === 0) {
+              const instrument = instruments.find((item) => item.id === row.instrumentId);
+              row.dedupKey = calibrationDedupKey(
+                stationCodeById.get(instrument?.stationId ?? '') ?? '',
+                instrument?.serialNo ?? '',
+                row.date
+              );
+            }
+          });
+        // 旧更换记录一律视为人工登记，重建逻辑只管理 reminder
+        await tx
+          .table<Replace, string>('replaces')
+          .toCollection()
+          .modify((row) => {
+            if (row.kind !== 'reminder') row.kind = 'manual';
+          });
       });
   }
 }
@@ -457,6 +502,7 @@ export async function seedDemoData(): Promise<void> {
       newSerialNo: 'L4C-20250301-21',
       date: today,
       state: '待更换',
+      kind: 'manual',
       operator: '周渝',
       remark: '新仪器已到货，待停电窗口安装',
       createdAt: now,
@@ -469,6 +515,7 @@ export async function seedDemoData(): Promise<void> {
       newSerialNo: 'CMG-3E-20250410-33',
       date: daysAgo(20),
       state: '已更换',
+      kind: 'manual',
       operator: '林之遥',
       remark: '已完成安装，待复核标定',
       createdAt: now - 20 * 86400000,
@@ -481,6 +528,7 @@ export async function seedDemoData(): Promise<void> {
       newSerialNo: 'FSS3B-20250506-24',
       date: daysAgo(60),
       state: '已复核',
+      kind: 'manual',
       operator: '陈立群',
       remark: '复核标定合格，序列号已回写',
       createdAt: now - 60 * 86400000,
@@ -523,6 +571,11 @@ export async function seedDemoData(): Promise<void> {
               calibrationRows.push({
                 ...calibrationSeed,
                 responseVerdict: verdict,
+                dedupKey: calibrationDedupKey(
+                  stationRest.code,
+                  instrumentRest.serialNo,
+                  calibrationSeed.date
+                ),
                 ...stamp(
                   400 + arrayIndex * 400 + stationIndex * 100 + instrumentIndex * 20 + calibrationIndex
                 ),
@@ -551,11 +604,19 @@ export async function initDatabase(): Promise<void> {
   stampDbVersion();
 }
 
-/** 清空全部业务表（导入覆盖与重置共用） */
+/** 清空全部业务表（导入覆盖与重置共用；入库批次审计记录一并清空） */
 export async function clearAllTables(): Promise<void> {
   await db.transaction(
     'rw',
-    [db.arrays, db.stations, db.instruments, db.calibrations, db.replaces],
+    [
+      db.arrays,
+      db.stations,
+      db.instruments,
+      db.calibrations,
+      db.replaces,
+      db.importBatches,
+      db.importItems,
+    ],
     async () => {
       await Promise.all([
         db.arrays.clear(),
@@ -563,6 +624,8 @@ export async function clearAllTables(): Promise<void> {
         db.instruments.clear(),
         db.calibrations.clear(),
         db.replaces.clear(),
+        db.importBatches.clear(),
+        db.importItems.clear(),
       ]);
     }
   );

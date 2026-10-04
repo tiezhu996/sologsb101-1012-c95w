@@ -16,6 +16,11 @@ export interface Calibration {
   selfNoise: number;
   /** 脉冲响应结论 */
   responseVerdict: ResponseVerdict;
+  /**
+   * 业务核对键：台站码|序列号|标定日期（归一化后）。
+   * 离线包合并时据此判重；由 utils/calibrationDedup.calibrationDedupKey 生成。
+   */
+  dedupKey: string;
   /** 标定人 */
   operator: string;
   /** 标定机构 */

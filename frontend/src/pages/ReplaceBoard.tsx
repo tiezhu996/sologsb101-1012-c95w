@@ -405,13 +405,16 @@ export default function ReplaceBoard() {
             },
             {
               title: '更换状态',
-              width: 150,
+              width: 170,
               render: (_: unknown, row: AssessmentRow) =>
                 row.replace ? (
                   <div>
-                    <Tag color={row.replace.state === '已复核' ? 'green' : row.replace.state === '已更换' ? 'blue' : 'orange'}>
-                      {row.replace.state}
-                    </Tag>
+                    <div>
+                      <Tag color={row.replace.state === '已复核' ? 'green' : row.replace.state === '已更换' ? 'blue' : 'orange'}>
+                        {row.replace.state}
+                      </Tag>
+                      {row.replace.kind === 'reminder' ? <Tag color="purple">系统提醒</Tag> : null}
+                    </div>
                     <div className="gb-hint">{row.replace.date}</div>
                   </div>
                 ) : (
@@ -486,11 +489,16 @@ export default function ReplaceBoard() {
               { title: '日期', dataIndex: ['row', 'date'], width: 120, className: 'gb-mono' },
               {
                 title: '状态',
-                width: 130,
+                width: 150,
                 render: (_: unknown, item) => (
-                  <Tag color={item.row.state === '已复核' ? 'green' : item.row.state === '已更换' ? 'blue' : 'orange'}>
-                    {item.row.state}
-                  </Tag>
+                  <Space size={4} direction="vertical" style={{ rowGap: 2 }}>
+                    <Space size={4}>
+                      <Tag color={item.row.state === '已复核' ? 'green' : item.row.state === '已更换' ? 'blue' : 'orange'}>
+                        {item.row.state}
+                      </Tag>
+                      {item.row.kind === 'reminder' ? <Tag color="purple">系统提醒</Tag> : null}
+                    </Space>
+                  </Space>
                 ),
               },
               { title: '责任人', dataIndex: ['row', 'operator'], width: 100 },

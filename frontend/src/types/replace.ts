@@ -1,3 +1,6 @@
+/** 更换记录来源：人工登记的更换单 / 入库流程按最新标定自动重建的系统提醒 */
+export type ReplaceKind = 'manual' | 'reminder';
+
 /** 更换状态机：待更换 → 已更换 → 已复核 */
 export type ReplaceState = '待更换' | '已更换' | '已复核';
 
@@ -25,6 +28,11 @@ export interface Replace {
   state: ReplaceState;
   /** 责任人 */
   operator: string;
+  /**
+   * 来源：manual 为人工登记更换单；reminder 为标定入库重建出的系统更换提醒。
+   * 缺省（旧数据）按 manual 处理。入库重建只增删 reminder，不触碰人工单。
+   */
+  kind?: ReplaceKind;
   /** 备注 */
   remark: string;
   createdAt: number;

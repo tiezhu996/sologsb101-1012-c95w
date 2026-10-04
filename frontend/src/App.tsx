@@ -9,6 +9,7 @@ import {
   AppstoreOutlined,
   DashboardOutlined,
   ExperimentOutlined,
+  FileAddOutlined,
   GlobalOutlined,
   SwapOutlined,
   ThunderboltOutlined,
@@ -38,6 +39,7 @@ const { Header, Sider, Content, Footer } = Layout;
 function buildSelectedKey(pathname: string, currentArrayId: string | null): string {
   if (pathname.startsWith('/calibrations')) return ROUTES.calibrations;
   if (pathname.startsWith('/replacements')) return ROUTES.replacements;
+  if (pathname.startsWith('/imports')) return ROUTES.imports;
   if (pathname.startsWith('/geometry')) return ROUTES.geometry;
   if (pathname.startsWith('/stations/') && currentArrayId) return ROUTES.stations(currentArrayId);
   return ROUTES.arrays;
@@ -118,6 +120,7 @@ export default function App() {
               },
               { key: ROUTES.calibrations, icon: <DashboardOutlined />, label: '标定记录台' },
               { key: ROUTES.replacements, icon: <SwapOutlined />, label: '合格评定与更换' },
+              { key: ROUTES.imports, icon: <FileAddOutlined />, label: '标定离线包入库' },
               { key: ROUTES.geometry, icon: <GlobalOutlined />, label: '台阵几何与备份' },
             ]}
           />

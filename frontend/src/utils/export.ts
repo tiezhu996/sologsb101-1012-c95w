@@ -12,7 +12,9 @@ import {
   type BackupPayload,
 } from '@/utils/db';
 import type { ResponseVerdict } from '@/types/calibration';
+import { judgeCalibration } from '@/types/calibration';
 import { apertureKm, centroid, haversineKm, round, stationDistances } from '@/utils/geo';
+import { calibrationDedupKey } from '@/utils/calibrationDedup';
 
 /** 备份集合键名 */
 export const BACKUP_KEYS = ['arrays', 'stations', 'instruments', 'calibrations', 'replaces'] as const;
@@ -112,9 +114,32 @@ export function readFileText(file: File): Promise<string> {
   });
 }
 
+/** 为待写入的标定补齐业务核对键与响应结论（旧版本备份无 dedupKey） */
+function withCalibrationKeys(payload: BackupPayload): BackupPayload['calibrations'] {
+  const stationCodeById = new Map(payload.stations.map((row) => [row.id, row.code]));
+  const instrumentById = new Map(payload.instruments.map((row) => [row.id, row]));
+  return payload.calibrations.map((row) => {
+    if (typeof row.dedupKey === 'string' && row.dedupKey.length > 0) return row;
+    const instrument = instrumentById.get(row.instrumentId);
+    const verdict =
+      row.responseVerdict ??
+      judgeCalibration(instrument?.type ?? '宽频带', row.sensitivity, row.selfNoise);
+    return {
+      ...row,
+      responseVerdict: verdict,
+      dedupKey: calibrationDedupKey(
+        stationCodeById.get(instrument?.stationId ?? '') ?? '',
+        instrument?.serialNo ?? '',
+        row.date
+      ),
+    };
+  });
+}
+
 /** 导入快照：overwrite=true 先清空全部表，否则按主键合并 */
 export async function importBackup(payload: BackupPayload, overwrite: boolean): Promise<CountMap> {
   if (overwrite) await clearAllTables();
+  const calibrations = withCalibrationKeys(payload);
   await db.transaction(
     'rw',
     [db.arrays, db.stations, db.instruments, db.calibrations, db.replaces],
@@ -122,8 +147,10 @@ export async function importBackup(payload: BackupPayload, overwrite: boolean): 
       await db.arrays.bulkPut(payload.arrays);
       await db.stations.bulkPut(payload.stations);
       await db.instruments.bulkPut(payload.instruments);
-      await db.calibrations.bulkPut(payload.calibrations);
-      await db.replaces.bulkPut(payload.replaces);
+      await db.calibrations.bulkPut(calibrations);
+      await db.replaces.bulkPut(
+        payload.replaces.map((row) => ({ kind: 'manual' as const, ...row }))
+      );
     }
   );
   return countPayload(payload);
