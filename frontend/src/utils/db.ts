@@ -12,9 +12,10 @@ import type { Instrument } from '@/types/instrument';
 import { judgeCalibration } from '@/types/calibration';
 import type { Calibration } from '@/types/calibration';
 import type { Replace } from '@/types/replace';
+import type { ImportBatch, ImportItem } from '@/types/importBatch';
 
 /** 当前数据结构版本号：每次调整字段结构必须 +1 并补迁移 */
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
 
 /** 数据库名（浏览器 IndexedDB 中的库名） */
 export const DB_NAME = 'gbseisarray';
@@ -44,6 +45,8 @@ export class SeisArrayDatabase extends Dexie {
   instruments!: Table<Instrument, string>;
   calibrations!: Table<Calibration, string>;
   replaces!: Table<Replace, string>;
+  importBatches!: Table<ImportBatch, string>;
+  importItems!: Table<ImportItem, string>;
 
   constructor() {
     super(DB_NAME);
@@ -58,7 +61,7 @@ export class SeisArrayDatabase extends Dexie {
     });
 
     // v2：补齐筛选与统计需要的索引（孔径/布设日期、经纬度/基岩、类型/序列号、灵敏度/结论、原因）
-    this.version(DB_VERSION)
+    this.version(2)
       .stores({
         arrays: 'id, name, state, apertureKm, deployDate, department, updatedAt',
         stations: 'id, arrayId, code, lat, lng, elevM, bedrock, updatedAt',
@@ -87,6 +90,12 @@ export class SeisArrayDatabase extends Dexie {
             });
         }
       });
+
+    // v3：新增离线包合并入库的暂存表（批次检查点 + 入库项），业务五表结构不变
+    this.version(DB_VERSION).stores({
+      importBatches: 'id, fingerprint, status, updatedAt',
+      importItems: 'id, batchId, dedupeKey, instrumentId, resolution, status, updatedAt',
+    });
   }
 }
 
@@ -551,11 +560,11 @@ export async function initDatabase(): Promise<void> {
   stampDbVersion();
 }
 
-/** 清空全部业务表（导入覆盖与重置共用） */
+/** 清空全部业务表（导入覆盖与重置共用，连同入库批次暂存表） */
 export async function clearAllTables(): Promise<void> {
   await db.transaction(
     'rw',
-    [db.arrays, db.stations, db.instruments, db.calibrations, db.replaces],
+    [db.arrays, db.stations, db.instruments, db.calibrations, db.replaces, db.importBatches, db.importItems],
     async () => {
       await Promise.all([
         db.arrays.clear(),
@@ -563,6 +572,8 @@ export async function clearAllTables(): Promise<void> {
         db.instruments.clear(),
         db.calibrations.clear(),
         db.replaces.clear(),
+        db.importBatches.clear(),
+        db.importItems.clear(),
       ]);
     }
   );

@@ -1,12 +1,13 @@
 /**
- * 备份导入导出：整库 JSON 快照的组装、校验、下载与导入；
+ * 备份导入导出：整库 JSON 快照的组装、校验、下载与覆盖恢复；
  * 以及按台阵汇总的几何与标定结论生成。
+ * 注意：多个标定组离线包的「合并入库」不走本模块，
+ * 统一由 utils/importPipeline.ts 的可恢复流水线完成（核对去重 + 冲突待确认）。
  */
 import {
   db,
   DB_NAME,
   DB_VERSION,
-  createId,
   clearAllTables,
   stampBackupTime,
   type BackupPayload,
@@ -112,7 +113,7 @@ export function readFileText(file: File): Promise<string> {
   });
 }
 
-/** 导入快照：overwrite=true 先清空全部表，否则按主键合并 */
+/** 覆盖恢复导入：先清空全部表（含入库批次暂存），再整库写入 */
 export async function importBackup(payload: BackupPayload, overwrite: boolean): Promise<CountMap> {
   if (overwrite) await clearAllTables();
   await db.transaction(
@@ -127,40 +128,6 @@ export async function importBackup(payload: BackupPayload, overwrite: boolean): 
     }
   );
   return countPayload(payload);
-}
-
-/** 追加式导入：为导入数据重新分配 id，避免覆盖现有档案 */
-export function remapIds(payload: BackupPayload): BackupPayload {
-  const arrayMap = new Map<string, string>();
-  const stationMap = new Map<string, string>();
-  const instrumentMap = new Map<string, string>();
-
-  const arrays = payload.arrays.map((row) => {
-    const id = createId('arr');
-    arrayMap.set(row.id, id);
-    return { ...row, id };
-  });
-  const stations = payload.stations.map((row) => {
-    const id = createId('stn');
-    stationMap.set(row.id, id);
-    return { ...row, id, arrayId: arrayMap.get(row.arrayId) ?? row.arrayId };
-  });
-  const instruments = payload.instruments.map((row) => {
-    const id = createId('ins');
-    instrumentMap.set(row.id, id);
-    return { ...row, id, stationId: stationMap.get(row.stationId) ?? row.stationId };
-  });
-  const calibrations = payload.calibrations.map((row) => ({
-    ...row,
-    id: createId('cal'),
-    instrumentId: instrumentMap.get(row.instrumentId) ?? row.instrumentId,
-  }));
-  const replaces = payload.replaces.map((row) => ({
-    ...row,
-    id: createId('rpl'),
-    instrumentId: instrumentMap.get(row.instrumentId) ?? row.instrumentId,
-  }));
-  return { ...payload, arrays, stations, instruments, calibrations, replaces };
 }
 
 /** 按台阵汇总的几何与标定结论 */

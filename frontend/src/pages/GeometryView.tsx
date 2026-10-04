@@ -11,7 +11,6 @@ import {
   Card,
   Col,
   Descriptions,
-  Radio,
   Row,
   Select,
   Space,
@@ -24,6 +23,7 @@ import { DownloadOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/ic
 import type { UploadFile } from 'antd';
 import StatBadge from '@/components/common/StatBadge';
 import EmptyPanel from '@/components/common/EmptyPanel';
+import ImportBatchPanel from '@/components/import/ImportBatchPanel';
 import { useAppSelector } from '@/stores/store';
 import { selectArrays, selectStations } from '@/stores/arraySlice';
 import { selectInstruments } from '@/stores/instrumentSlice';
@@ -45,7 +45,6 @@ import {
   exportBackupJson,
   importBackup,
   readFileText,
-  remapIds,
   stationRadialDistances,
   validateBackup,
   type CountMap,
@@ -67,7 +66,6 @@ export default function GeometryView() {
   const [counts, setCounts] = useState<CountMap>(EMPTY_COUNTS);
   const [lastBackupAt, setLastBackupAt] = useState<string | null>(null);
   const [stampedVersion, setStampedVersion] = useState<number>(DB_VERSION);
-  const [overwriteOnImport, setOverwriteOnImport] = useState(true);
   const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
@@ -174,6 +172,7 @@ export default function GeometryView() {
     }
   };
 
+  /** 覆盖恢复：先清空本地全部表（含入库批次暂存），再整库写入 */
   const handleImport = async (): Promise<void> => {
     const file = fileList[0]?.originFileObj ?? (fileList[0] as unknown as File | undefined);
     if (!file) {
@@ -195,18 +194,17 @@ export default function GeometryView() {
         message.error(`备份校验失败：${validation.errors.join('；')}`);
         return;
       }
-      const payload = overwriteOnImport ? validation.payload : remapIds(validation.payload);
-      const summary = countPayload(payload);
+      const summary = countPayload(validation.payload);
       const confirmed = window.confirm(
-        `将导入 ${Object.entries(summary)
+        `覆盖恢复会先清空现有本地数据（含未完成的入库批次），再写入 ${Object.entries(summary)
           .map(([key, value]) => `${key} ${value} 条`)
-          .join('、')}；${overwriteOnImport ? '覆盖模式会先清空现有本地数据' : '追加模式会重新分配 id 保留现有数据'}。确认继续？`
+          .join('、')}。如需保留台账并合并标定组的离线包，请改用上方「离线包合并入库」。确认继续？`
       );
       if (!confirmed) return;
-      await importBackup(payload, overwriteOnImport);
+      await importBackup(validation.payload, true);
       await refresh();
-      setNotice('导入完成，几何视图与统计已刷新。');
-      message.success('导入完成');
+      setNotice('覆盖恢复完成，几何视图与统计已刷新。');
+      message.success('覆盖恢复完成');
     } finally {
       setBusy(false);
       setFileList([]);
@@ -469,15 +467,10 @@ export default function GeometryView() {
         />
       </Card>
 
-      <Card className="gb-panel" size="small" title="结构版本与全量 JSON 导入导出">
+      <ImportBatchPanel />
+
+      <Card className="gb-panel" size="small" title="结构版本与覆盖恢复（整库快照）">
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Space wrap>
-            <span className="gb-hint">导入模式：</span>
-            <Radio.Group value={overwriteOnImport} onChange={(event) => setOverwriteOnImport(event.target.value)}>
-              <Radio value={true}>覆盖（先清空本地数据）</Radio>
-              <Radio value={false}>追加（重新分配 id）</Radio>
-            </Radio.Group>
-          </Space>
           <Space wrap>
             <Upload
               fileList={fileList}
@@ -486,10 +479,10 @@ export default function GeometryView() {
               beforeUpload={() => false}
               onChange={({ fileList: list }) => setFileList(list)}
             >
-              <Button icon={<UploadOutlined />}>选择 JSON 文件</Button>
+              <Button icon={<UploadOutlined />}>选择备份 JSON</Button>
             </Upload>
-            <Button type="primary" icon={<UploadOutlined />} loading={busy} onClick={() => void handleImport()}>
-              开始导入
+            <Button danger icon={<UploadOutlined />} loading={busy} onClick={() => void handleImport()}>
+              覆盖恢复（先清空本地数据）
             </Button>
             <Button icon={<DownloadOutlined />} onClick={() => void handleExport()}>
               导出当前数据
@@ -511,7 +504,9 @@ export default function GeometryView() {
           </Descriptions>
           <p className="gb-hint">
             数据仅保存在当前浏览器 IndexedDB（{DB_NAME}）中，换浏览器或清空站点数据后不会自动跟随，请通过 JSON
-            备份迁移。导出内容包含 arrays / stations / instruments / calibrations / replaces 五张表。
+            备份迁移。导出内容包含 arrays / stations / instruments / calibrations / replaces
+            五张台账表；入库批次暂存（importBatches / importItems）为过程数据，不随快照导出。
+            合并标定组离线包请用上方「离线包合并入库」，此处「覆盖恢复」会清空本地全部数据。
           </p>
         </Space>
       </Card>
